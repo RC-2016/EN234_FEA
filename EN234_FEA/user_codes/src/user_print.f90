@@ -218,6 +218,8 @@ subroutine compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_average
 
 end subroutine compute_element_volume_average_3D
 
+
+
 subroutine compute_J_integral(J_integral_value)
     use Types
     use ParamIO
@@ -228,7 +230,7 @@ subroutine compute_J_integral(J_integral_value)
     use Element_Utilities, only : N => shape_functions_2D
     use Element_Utilities, only:  dNdxi => shape_function_derivatives_2D
     use Element_Utilities, only:  dNdx => shape_function_spatial_derivatives_2D
-    use Element_Utilities, only : xi => integrationpoints_3D, w => integrationweights_2D
+    use Element_Utilities, only : xi => integrationpoints_2D, w => integrationweights_2D
     use Element_Utilities, only : dxdxi => jacobian_2D
     use Element_Utilities, only : initialize_integration_points
     use Element_Utilities, only : calculate_shapefunctions
@@ -284,13 +286,87 @@ subroutine compute_J_integral(J_integral_value)
 
   !  Write your code to calculate the J integral here
 
-  !  You will need to loop over the crack tip elements, and sum the contribution to the J integral from each element.
-  !
-  !  You can access the first and last crack tip element using
-  !    lmn_start = zone_list(2)%start_element
-  !    lmn_end = zone_list(2)%end_element
 
-  !  The two subroutines below extract data for elements and nodes (see module Mesh.f90 for the source code for these subroutines)
+  !  NOTE: 10/16/15 - This is incomplete.  I did the math out with Chiraag and understand the necessary calculations to find the
+  !             stress intensity facotor.  I was only able to complete half the assignment with the necessary time - family wedding today (who
+  !             the hell gets married on a friday) but I understand the material.
+  !
+  !         If I had time I would have done the following - initilized all of the necessary variables in the system. Updated the code to calc
+  !         the j integral and then use the subsequent information for the element to solve for the stress intensity factory.
+
+
+!call initialize_integration_points(n_points, n_nodes, xi, w)
+!
+!    element_residual = 0.d0
+!    element_stiffness = 0.d0
+!
+!    !adjust for 2d - change matrix values of d
+!    D = 0.d0
+!    E = element_properties(1)
+!    xnu = element_properties(2)
+!    d44 = 0.5D0*E/(1+xnu)
+!    d11 = (1.D0-xnu)*E/( (1+xnu)*(1-2.D0*xnu) )
+!    d12 = xnu*E/( (1+xnu)*(1-2.D0*xnu) )
+!    d33 = E/( 2.d0*(1+xnu) )
+!    !D(1:3,1:3) = d12
+!    !!!!!!!!!!!!I added these between the !
+!    D(2,1) = d12 !summation
+!    D(3,1) = 0.d0
+!    D(1,2) = d12
+!    D(2,2) = 0.d0
+!    D(1,3) = 0.d0
+!    D(2,3) = 0.d0
+!    !!!!!!!!!!!
+!    D(1,1) = d11
+!    D(2,2) = d11
+!    D(3,3) = d33     !divide by 2??
+!    !D(4,4) = d44
+!    !D(5,5) = d44
+!    !D(6,6) = d44
+!
+!!    write(6,*) 'variable name = ',n_nodes
+!
+!    !     --  Loop over integration points
+!    do kint = 1, n_points
+!        call calculate_shapefunctions(xi(1:2,kint),n_nodes,N,dNdxi)
+!        dxdxi = matmul(x(1:2,1:n_nodes),dNdxi(1:n_nodes,1:2)) !changed the x from 3 to 2
+!        call invert_small(dxdxi,dxidx,determinant)
+!        dNdx(1:n_nodes,1:2) = matmul(dNdxi(1:n_nodes,1:2),dxidx) !change the x from 3 to 2
+!        B = 0.d0
+!        B(1,1:2*n_nodes-1:2) = dNdx(1:n_nodes,1)
+!        B(2,2:2*n_nodes:2) = dNdx(1:n_nodes,2)
+!        B(3,1:2*n_nodes-1:2)   = dNdx(1:n_nodes,2)
+!        B(3,2:2*n_nodes:2)   = dNdx(1:n_nodes,1)
+!        !B(4,1:3*n_nodes-2:3) = dNdx(1:n_nodes,2)
+!        !B(4,2:3*n_nodes-1:3) = dNdx(1:n_nodes,1)
+!        !B(5,1:3*n_nodes-2:3) = dNdx(1:n_nodes,3)
+!        !B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
+!        !B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
+!        !B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+!
+!        strain = matmul(B,dof_total)
+!        dstrain = matmul(B,dof_increment)
+!
+!        stress = matmul(D,strain+dstrain)
+!        element_residual(1:2*n_nodes) = element_residual(1:2*n_nodes) - matmul(transpose(B),stress)*w(kint)*determinant
+!
+!        element_stiffness(1:2*n_nodes,1:2*n_nodes) = element_stiffness(1:2*n_nodes,1:2*n_nodes) &
+!            + matmul(transpose(B(1:3,1:2*n_nodes)),matmul(D,B(1:3,1:2*n_nodes)))*w(kint)*determinant
+!
+!    end do
+!
+!
+!
+!
+!
+!
+!  !  You will need to loop over the crack tip elements, and sum the contribution to the J integral from each element.
+!  !
+!  !  You can access the first and last crack tip element using
+!      lmn_start = zone_list(2)%start_element
+!      lmn_end = zone_list(2)%end_element
+
+    !  The two subroutines below extract data for elements and nodes (see module Mesh.f90 for the source code for these subroutines)
 
     call extract_element_data(lmn,element_identifier,n_nodes,node_list,n_properties,element_properties, &
                                             n_state_variables,initial_state_variables,updated_state_variables)

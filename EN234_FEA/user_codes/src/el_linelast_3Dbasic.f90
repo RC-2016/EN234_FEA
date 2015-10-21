@@ -20,6 +20,7 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     use Element_Utilities, only : initialize_integration_points
     use Element_Utilities, only : calculate_shapefunctions
     use Element_Utilities, only : invert_small
+    use Element_Utilities, only : dNbardx => vol_avg_shape_function_derivatives_3D
     implicit none
 
     integer, intent( in )         :: lmn                                                    ! Element number
@@ -55,7 +56,7 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
           
 
     ! Local Variables
-    integer      :: n_points,kint
+    integer      :: n_points,kint,kk
 
     real (prec)  ::  strain(6), dstrain(6)             ! Strain vector contains [e11, e22, e33, 2e12, 2e13, 2e23]
     real (prec)  ::  stress(6)                         ! Stress vector contains [s11, s22, s33, s12, s13, s23]
@@ -63,7 +64,10 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     real (prec)  ::  B(6,length_dof_array)             ! strain = B*(dof_total+dof_increment)
     real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
     real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
-    real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
+    real (prec)  ::  E, xnu, D44, D11, D12             ! Material properties
+    real (prec)  ::  B_correction(6, length_dof_array) ! B_correction
+    real (prec)  ::  B_bar(6,length_dof_array)         ! B_bar calculation
+    real (prec)  ::  el_vol                            ! elemental volume
     !
     !     Subroutine to compute element stiffness matrix and residual force vector for 3D linear elastic elements
     !     El props are:
@@ -82,6 +86,36 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
 
     call initialize_integration_points(n_points, n_nodes, xi, w)
 
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !Checking against which element type created
+    !Added do loop to compute dNbar
+
+    IF (element_identifier == 1002) THEN
+
+        write(6,*) 'element is 1002'
+
+        dNbardx = 0.d0
+        el_vol = 0.d0
+
+        do kint = 1, n_points
+            call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+            dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+
+            call invert_small(dxdxi,dxidx,determinant)
+            dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+
+            el_vol = el_vol + w(kint)*determinant
+
+            dNbardx(1:n_nodes,1:3) = dNbardx(1:n_nodes,1:3) +  dNdx(1:n_nodes,1:3) * w(kint) * determinant
+
+        end do
+
+        dNbardx = dNbardx/el_vol
+
+    END IF
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
     element_residual = 0.d0
     element_stiffness = 0.d0
 	
@@ -98,13 +132,16 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     D(4,4) = d44
     D(5,5) = d44
     D(6,6) = d44
-  
+
     !     --  Loop over integration points
     do kint = 1, n_points
+
         call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
         dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+
         call invert_small(dxdxi,dxidx,determinant)
         dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+
         B = 0.d0
         B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)
         B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)
@@ -116,16 +153,87 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
         B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
         B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
 
-        strain = matmul(B,dof_total)
-        dstrain = matmul(B,dof_increment)
-      
-        stress = matmul(D,strain+dstrain)
-        element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B),stress)*w(kint)*determinant
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !Added B_correction 10/20
+        !Added b_bar and if statement for element identifier
+        !compute new strain, stress values based with b_bar
 
-        element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
-            + matmul(transpose(B(1:6,1:3*n_nodes)),matmul(D,B(1:6,1:3*n_nodes)))*w(kint)*determinant
+        B_correction = 0.d0
+
+        if (element_identifier == 1002) then
+
+            do kk = 1,n_nodes
+                B_correction(1,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
+                B_correction(2,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
+                B_correction(3,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
+            end do
+
+            B_bar = B + B_correction*(1.d0/3.d0)
+
+            strain = matmul(B_bar,dof_total)
+            dstrain = matmul(B_bar,dof_increment)
+
+            stress = matmul(D,strain+dstrain)
+            element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B_bar),stress)*w(kint)*determinant
+
+            element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
+                + matmul(transpose(B_bar(1:6,1:3*n_nodes)),matmul(D,B_bar(1:6,1:3*n_nodes)))*w(kint)*determinant
+
+            write(6,*) ' 1002 calcuations complete '
+
+        else
+
+            !if it is not 1002 than it is 1001 and compute the strain, stress with just B
+
+            !original code
+            strain = matmul(B,dof_total)
+            dstrain = matmul(B,dof_increment)
+
+            stress = matmul(D,strain+dstrain)
+            element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B),stress)*w(kint)*determinant
+
+            element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
+                + matmul(transpose(B(1:6,1:3*n_nodes)),matmul(D,B(1:6,1:3*n_nodes)))*w(kint)*determinant
+
+            write(6,*) ' 1001 calcuations complete '
+
+        endif
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        !!!!!my notes for changes and computations!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !!!!!!!!!!!!!!!!!!!!! Changed this to for l
+        !calc b_bar
+
+
+!        strain = matmul(B,dof_total)
+!        dstrain = matmul(B,dof_increment)
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !adjusting ouput to compute with B_bar
+!
+!        stress = matmul(D,strain+dstrain)
+!        element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B_bar),stress)*w(kint)*determinant
+!
+!        element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
+!            + matmul(transpose(B_bar(1:6,1:3*n_nodes)),matmul(D,B_bar(1:6,1:3*n_nodes)))*w(kint)*determinant
+!
+!        write(6,*) ' element stiffness complete '
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !original code
+!        strain = matmul(B,dof_total)
+!        dstrain = matmul(B,dof_increment)
+!
+!        stress = matmul(D,strain+dstrain)
+!        element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B),stress)*w(kint)*determinant
+!
+!        element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
+!            + matmul(transpose(B(1:6,1:3*n_nodes)),matmul(D,B(1:6,1:3*n_nodes)))*w(kint)*determinant
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
     end do
+
   
     return
 end subroutine el_linelast_3dbasic
@@ -175,10 +283,10 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
 
     real( prec ), intent( in )    :: element_properties(n_properties)                       ! Element or material properties, stored in order listed in input file
     real( prec ), intent( in )    :: initial_state_variables(n_state_variables)             ! Element state variables.  Defined in this routine
-               
+
     real( prec ), intent( inout ) :: updated_state_variables(n_state_variables)             ! State variables at end of time step
     real( prec ), intent( out )   :: element_residual(length_dof_array)                     ! Element residual force (ROW)
-          
+
     logical, intent( inout )      :: element_deleted                                        ! Set to .true. to delete element
 
     ! Local Variables
@@ -197,7 +305,7 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
 
     !     element_properties(1)         Young's modulus
     !     element_properties(2)         Poisson's ratio
-    
+
     x = reshape(element_coords,(/3,length_coord_array/3/))
 
     if (n_nodes == 4) n_points = 1
@@ -208,11 +316,11 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
     call initialize_integration_points(n_points, n_nodes, xi, w)
 
     element_residual = 0.d0
-	
+
     D = 0.d0
     E = element_properties(1)
     xnu = element_properties(2)
-    d44 = 0.5D0*E/(1+xnu) 
+    d44 = 0.5D0*E/(1+xnu)
     d11 = (1.D0-xnu)*E/( (1+xnu)*(1-2.D0*xnu) )
     d12 = xnu*E/( (1+xnu)*(1-2.D0*xnu) )
     D(1:3,1:3) = d12
@@ -222,7 +330,7 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
     D(4,4) = d44
     D(5,5) = d44
     D(6,6) = d44
-  
+
     !     --  Loop over integration points
     do kint = 1, n_points
         call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
@@ -242,12 +350,12 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
 
         strain = matmul(B,dof_total)
         dstrain = matmul(B,dof_increment)
-      
+
         stress = matmul(D,strain+dstrain)
         element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B),stress)*w(kint)*determinant
 
     end do
-  
+
     return
 end subroutine el_linelast_3dbasic_dynamic
 
@@ -270,6 +378,7 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
     use Element_Utilities, only : initialize_integration_points
     use Element_Utilities, only : calculate_shapefunctions
     use Element_Utilities, only : invert_small
+    use Element_Utilities, only : dNbardx => vol_avg_shape_function_derivatives_3D
     implicit none
 
     integer, intent( in )         :: lmn                                                    ! Element number
@@ -307,7 +416,7 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
     ! Local Variables
     logical      :: strcmp
   
-    integer      :: n_points,kint,k
+    integer      :: n_points,kint,k,kk
 
     real (prec)  ::  strain(6), dstrain(6)             ! Strain vector contains [e11, e22, e33, 2e12, 2e13, 2e23]
     real (prec)  ::  stress(6)                         ! Stress vector contains [s11, s22, s33, s12, s13, s23]
@@ -316,8 +425,12 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
     real (prec)  ::  B(6,length_dof_array)             ! strain = B*(dof_total+dof_increment)
     real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
     real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
-    real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
-    real (prec)  :: p, smises                          ! Pressure and Mises stress
+    real (prec)  ::  E, xnu, D44, D11, D12              ! Material properties
+    real (prec)  ::  p, smises                          ! Pressure and Mises stress
+    real (prec)  ::  B_correction(6, length_dof_array) ! B_correction
+    real (prec)  ::  B_bar(6,length_dof_array)         ! B_bar calculation
+    real (prec)  ::  el_vol                            ! elemental volume
+
     !
     !     Subroutine to compute element contribution to project element integration point data to nodes
 
@@ -332,6 +445,36 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
     if (n_nodes == 20) n_points = 27
 
     call initialize_integration_points(n_points, n_nodes, xi, w)
+
+     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !Checking against which element type created
+    !Added do loop to compute dNbar
+
+    IF (element_identifier == 1002) THEN
+
+        write(6,*) 'element is 1002 - field vars'
+
+        dNbardx = 0.d0
+        el_vol = 0.d0
+
+        do kint = 1, n_points
+            call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+            dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+
+            call invert_small(dxdxi,dxidx,determinant)
+            dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+
+            el_vol = el_vol + w(kint)*determinant
+
+            dNbardx(1:n_nodes,1:3) = dNbardx(1:n_nodes,1:3) +  dNdx(1:n_nodes,1:3) * w(kint) * determinant
+
+        end do
+
+        dNbardx = dNbardx/el_vol
+
+    END IF
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
     nodal_fieldvariables = 0.d0
 	
@@ -366,8 +509,41 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
         B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
         B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
 
-        strain = matmul(B,dof_total)
-        dstrain = matmul(B,dof_increment)
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !Added B_correction 10/20
+
+        B_correction = 0.d0
+
+        if (element_identifier == 1002) then
+
+            do kk = 1,n_nodes
+                B_correction(1,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
+                B_correction(2,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
+                B_correction(3,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
+            end do
+
+            !calc b_bar
+            B_bar = B + B_correction*(1.d0/3.d0)
+
+            strain = matmul(B_bar,dof_total)
+            dstrain = matmul(B_bar,dof_increment)
+
+            write(6,*) 'Field vars complete for element 1002'
+
+        else
+
+            strain = matmul(B,dof_total)
+            dstrain = matmul(B,dof_increment)
+
+            write(6,*) 'Field vars subroutine compelete for element 1001'
+
+        endif
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+!        strain = matmul(B,dof_total)
+!        dstrain = matmul(B,dof_increment)
         stress = matmul(D,strain+dstrain)
         p = sum(stress(1:3))/3.d0
         sdev = stress
