@@ -17,7 +17,7 @@ subroutine user_print(n_steps)
   integer ::  n_state_vars_per_intpt                                         ! No. state variables per integration point
   real (prec) ::   vol_averaged_strain(6)                                    ! Volume averaged strain in an element
   real (prec), allocatable ::   vol_averaged_state_variables(:)              ! Volume averaged state variables in an element
-
+  real (prec)   :: vol_avg_stress(6)
 
 
 !
@@ -40,30 +40,32 @@ subroutine user_print(n_steps)
    lmn = int(user_print_parameters(1))     ! The element number
 
    call compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_averaged_state_variables,length_state_variable_array, &
-                                                       n_state_vars_per_intpt)
-
+                                                       n_state_vars_per_intpt, vol_avg_stress)
+    write(6,*) ' user print'
 
     if (TIME<1.d-12) then
-      if (n_state_vars_per_intpt<6) then
-        write(user_print_units(1),'(A)') 'VARIABLES = TIME,e11,e22,e33,e12,e13,e23'
-      else
+ !     if (n_state_vars_per_intpt<6) then
+ !       write(user_print_units(1),'(A)') 'VARIABLES = TIME,e11,e22,e33,e12,e13,e23'
+ !     else
          write(user_print_units(1),'(A)') 'VARIABLES = TIME,e11,e22,e33,e12,e13,e23,s11,s22,s33,s12,s13,s23'
-      endif
+ !     endif
     endif
 
-   if (n_state_vars_per_intpt<6) then
-      write(user_print_units(1),'(7(1x,D12.5))') TIME+DTIME,vol_averaged_strain(1:6)
-   else
-      vol_averaged_state_variables(1:3) = vol_averaged_state_variables(1:3) + vol_averaged_state_variables(7)
-      write(user_print_units(1),'(13(1x,D12.5))') TIME+DTIME,vol_averaged_strain(1:6),vol_averaged_state_variables(1:6)
-   endif
+ !  if (n_state_vars_per_intpt<6) then
+      !write(user_print_units(1),'(7(1x,D12.5))') TIME+DTIME,vol_averaged_strain(1:6)
+      write(user_print_units(1),'(13(1x,D12.5))') TIME+DTIME,vol_averaged_strain(1:6),vol_avg_stress(1:6)
+ !  else
+!      vol_averaged_state_variables(1:3) = vol_averaged_state_variables(1:3) + vol_averaged_state_variables(7)
+!      write(user_print_units(1),'(13(1x,D12.5))') TIME+DTIME,vol_averaged_strain(1:6),vol_averaged_state_variables(1:6)
+!      write(user_print_units(1),'(13(1x,D12.5))') TIME+DTIME,vol_averaged_strain(1:6),vol_avg_stress(1:6)
+!   endif
 
 
 
 end subroutine user_print
 
 subroutine compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_averaged_state_vars,length_output_array, &
-                                                                                                       n_state_vars_per_intpt)
+                                                               n_state_vars_per_intpt, vol_avg_stress)
     use Types
     use ParamIO
     use Mesh, only : extract_element_data
@@ -86,6 +88,9 @@ subroutine compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_average
     real (prec), intent( out )  ::  vol_averaged_state_vars(length_output_array)
 
     integer, intent( out )      :: n_state_vars_per_intpt
+
+    !added for hw_6
+    real (prec), intent( out ) :: vol_avg_stress(6)
 
     ! Local variables
 
@@ -115,8 +120,12 @@ subroutine compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_average
     real (prec), allocatable  ::  B(:,:)               ! strain = B*(dof_total+dof_increment)
     real (prec)  ::  strain(6)                         ! Strain vector contains [e11, e22, e33, 2e12, 2e13, 2e23]
     real (prec)  ::  dstrain(6)                        ! Strain increment vector
-    real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
-    !
+    real (prec)  ::  dxidx(3,3), determinant             ! Jacobian inverse and determinant
+    !added from here down for hw#6
+    real (prec)  ::  stress(6)                         !added for hw six, input of the stress
+    real (prec)  ::  D(6,6)                            !added for hw six, input of the D
+
+
     !  Allocate memory to store element data.
     !  The variables specifying the size of the arrays are stored in the module user_subroutine_storage
     !  They are initialized when the input file is read, and specify the size of the arrays required to store data
@@ -159,6 +168,7 @@ subroutine compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_average
     vol_averaged_state_vars = 0.d0
     el_vol = 0.d0
     n_state_vars_per_intpt = n_state_variables/n_points
+    vol_avg_stress = 0.d0
 
     if (n_state_vars_per_intpt>size(vol_averaged_state_vars)) then
        write(IOW,*) ' Error detected in subroutine compute_element_volume_average_3d '
@@ -190,6 +200,11 @@ subroutine compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_average
 
         vol_averaged_strain(1:6) = vol_averaged_strain(1:6) + (strain(1:6)+dstrain(1:6))*w(kint)*determinant
 
+        call hypoelastic_material(strain, dstrain, n_properties, element_properties, stress, D)
+
+        vol_avg_stress(1:6) = vol_avg_stress(1:6) + stress(1:6)*w(kint)*determinant
+
+
         if (n_state_vars_per_intpt>0) then
            vol_averaged_state_vars(1:n_state_vars_per_intpt) = vol_averaged_state_vars(1:n_state_vars_per_intpt) &
                               + updated_state_variables(iof:iof+n_state_vars_per_intpt-1)*w(kint)*determinant
@@ -201,6 +216,9 @@ subroutine compute_element_volume_average_3D(lmn,vol_averaged_strain,vol_average
 
     vol_averaged_strain = vol_averaged_strain/el_vol
     vol_averaged_state_vars = vol_averaged_state_vars/el_vol
+
+    !added volume average stress
+    vol_avg_stress = vol_avg_stress/el_vol
 
     deallocate(node_list)
     deallocate(element_properties)

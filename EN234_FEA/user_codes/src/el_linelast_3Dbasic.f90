@@ -86,13 +86,32 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
 
     call initialize_integration_points(n_points, n_nodes, xi, w)
 
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !!10/26/15 - hw6
+    !!determining inf the input file is nonlinear
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    write(6,*) n_properties
+
+    IF (n_properties == 4) THEN
+        write(6,*) 'hypoelastic material based on input file'
+    else
+        write(6,*) 'linear elastic material based on input file'
+    END IF
+
+
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     !Checking against which element type created
     !Added do loop to compute dNbar
 
     IF (element_identifier == 1002) THEN
 
+        !if statement here to determine if linear or not
+
         write(6,*) 'element is 1002'
+
+        write(6,*) 'enter linear elastic mode'
 
         dNbardx = 0.d0
         el_vol = 0.d0
@@ -162,6 +181,8 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
 
         if (element_identifier == 1002) then
 
+!            write(6,*) 'enter linear elastic model b matrix model calculations'
+
             do kk = 1,n_nodes
                 B_correction(1,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
                 B_correction(2,3*kk-2:3*kk) = (dNbardx(kk,1:3) - dNdx(kk,1:3))
@@ -173,7 +194,17 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
             strain = matmul(B_bar,dof_total)
             dstrain = matmul(B_bar,dof_increment)
 
-            stress = matmul(D,strain+dstrain)
+            if (n_properties == 4) then
+
+                write(6,*) 'material call, hypoelastic'
+
+                call hypoelastic_material(strain, dstrain, n_properties, element_properties, &
+                 stress, D)
+
+            else
+                stress = matmul(D,strain+dstrain)
+            end if
+
             element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B_bar),stress)*w(kint)*determinant
 
             element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
@@ -183,7 +214,7 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
 
         else
 
-            !if it is not 1002 than it is 1001 and compute the strain, stress with just B
+            !if it is not a 1002 element or hypoelastic material than it is normal linear elastic behavior
 
             !original code
             strain = matmul(B,dof_total)
@@ -194,6 +225,9 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
 
             element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
                 + matmul(transpose(B(1:6,1:3*n_nodes)),matmul(D,B(1:6,1:3*n_nodes)))*w(kint)*determinant
+
+            write(6,*) 'element stiffness below'
+            write(6,*) element_stiffness
 
             write(6,*) ' 1001 calcuations complete '
 
@@ -238,6 +272,225 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     return
 end subroutine el_linelast_3dbasic
 
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !compute hypoelastic material model
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!==========================SUBROUTINE hypoelastic_material ==============================
+subroutine hypoelastic_material(strain, dstrain, n_properties, element_properties, stress, D) ! Output variables are stress and D
+
+    use Types
+    use ParamIO
+    use Mesh, only : node
+
+
+! verify this is the correct format
+!   passed variables
+    real( prec ), intent( in )    :: strain(6)
+    real( prec ), intent( in )    :: dstrain(6)
+    integer, intent( in )         :: n_properties
+    real( prec ), intent( in )    :: element_properties(n_properties)  ! Element or material properties, stored in order listed in input file
+    real( prec ), intent( out )   :: stress(6)
+    real( prec ), intent( out )   :: D(6,6)
+
+
+!   local variables
+    real( prec )    ::  total_strain_vector(6)                     !strain vector (strain + dstrain)
+    !real( prec )    ::  stress_vector(6)                          !stress vector this will be calculated
+    real( prec )    ::  devi_strain(6)                             !deviatoric strain tensor
+    real( prec )    ::  von_mises_strain                           !von mises strain
+    real( prec )    ::  E_s                                        !
+    real( prec )    ::  E_t                                        !
+    real( prec )    ::  n,k                                          !element numbers - material prop
+    real( prec )    ::  strain_int                                 !strain initial - material prop
+    real( prec )    ::  sigma_int                                  !stress initial - material prop
+    real( prec )    ::  sigma_e
+    real( prec )    ::  d_sigma_e
+    real( prec )    ::  d_sigma_e_bottom
+    real( prec )    ::  d_sigma_e_top
+    real( prec )    ::  id_matrix_1(6,6)
+    real( prec )    ::  id_matrix_2(6,6)
+    real( prec )    ::  D_1(6,6)
+    real( prec )    ::  D_2(6,6)
+    real( prec )    ::  e_dyadic_e(6,6)
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!Variable block!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    sigma_int = element_properties(1)
+    strain_int = element_properties(2)
+    n = element_properties(3)
+    k = element_properties(4)
+
+!    write(6,*) sigma_int
+!    write(6,*) strain_int
+!    write(6,*) n
+!    write(6,*) k
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!Calculations!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+!   total strain vector
+    total_strain_vector = (strain + dstrain)
+
+    write(6,*) 'tsv',total_strain_vector
+
+!   deviatoric strain
+    devi_strain(4:6) = total_strain_vector(4:6)/2.d0
+    devi_strain(1:3) = total_strain_vector(1:3) - (1.d0/3.d0)*sum(total_strain_vector(1:3))
+
+    write(6,*) ' devi',devi_strain
+
+!    write(6,*) devi_strain
+
+!   von mises strain
+!!!!!!!!!!!!! CHECK HERE ???? !!!!!!!!
+    von_mises_strain = dot_product(devi_strain(1:3) , devi_strain(1:3)) + 2.d0*dot_product(devi_strain(4:6),devi_strain(4:6))
+    von_mises_strain = dsqrt((2.d0/3.d0)*von_mises_strain)
+
+    write(6,*) 'von mises strain below'
+    write(6,*) von_mises_strain
+
+
+    !solve for sigma_e
+    if  (von_mises_strain < strain_int) then
+
+        sigma_e = dsqrt( (1.d0+n**2.d0)/((n-1.d0)**2.d0) - ( n/(n-1.d0) - von_mises_strain / strain_int )**2.d0 )
+        sigma_e = sigma_e - (1.d0/(n-1.d0))
+        sigma_e = sigma_e * sigma_int
+
+        write(6,*) 'von mises is less then strain initial - sigma_e below'
+        write(6,*) sigma_e
+
+    else
+
+        sigma_e = sigma_int * (von_mises_strain / strain_int)**(1/n)
+
+        write(6,*) 'von mises is greater than strain int - sigma_e below'
+        write(6,*) sigma_e
+
+    end if
+
+
+!   solving for stress vector
+    if (von_mises_strain == 0.d0) then
+        stress = 0.d0
+        stress(1:3) = k*sum(total_strain_vector(1:3))
+    else
+        stress(1:3) = (2.d0/3.d0)*sigma_e*(devi_strain(1:3) / von_mises_strain) + k * sum(total_strain_vector(1:3))
+        stress(4:6) = (2.d0/3.d0)*sigma_e*(devi_strain(4:6) / von_mises_strain)
+    endif
+
+!   ??????????????????
+!   E_t
+    if (von_mises_strain == 0.d0) then
+
+        d_sigma_e_top = ((n/(n-1.d0)) - (von_mises_strain/strain_int))
+        d_sigma_e_bottom = dsqrt( (1.d0+n**2)/(n-1.d0)**2.d0 - (n/(n-1.d0) - von_mises_strain / strain_int)**2.d0)
+        d_sigma_e_bottom = strain_int * d_sigma_e_bottom
+        d_sigma_e = sigma_int*(d_sigma_e_top / d_sigma_e_bottom)
+
+        E_t = d_sigma_e
+
+    else if (von_mises_strain > strain_int) then
+
+        write(6,*) 'von mises less that intial strain for derivative calc'
+
+        d_sigma_e = sigma_e/n/von_mises_strain
+        E_t = d_sigma_e
+
+        write(6,*) 'HERE - E_t value is below - top part of code'
+        write(6,*) E_t
+
+    else
+
+        write(6,*) 'von mises greater than initial strain for deriviatve calc'
+
+        d_sigma_e_top = ((n/(n-1.d0)) - (von_mises_strain/strain_int))
+        d_sigma_e_bottom = dsqrt( (1.d0+n**2)/(n-1.d0)**2 - (n/(n-1.d0) - von_mises_strain / strain_int)**2)
+        d_sigma_e_bottom = strain_int * d_sigma_e_bottom
+        d_sigma_e = sigma_int*(d_sigma_e_top / d_sigma_e_bottom)
+
+        E_t = d_sigma_e
+
+        write(6,*) 'HERE - E_t value is below - bottom part of code'
+        write(6,*) E_t
+
+    end if
+
+    !!!!!calculating E_s
+    if (von_mises_strain == 0) then
+
+        write(6,*) 'von mises strain is zero - E_s = E_t'
+
+        E_s = E_t
+
+        write(6,*) 'E_s value below'
+        write(6,*) E_s
+
+    else
+
+        E_s = sigma_e / von_mises_strain
+
+        write(6,*) 'E_s value below'
+        write(6,*) E_s
+
+    end if
+
+    !!!!calculation for the D matrix
+    !matrix building
+    id_matrix_1 = 0.d0
+    id_matrix_1(1,1) = 2.d0
+    id_matrix_1(2,2) = 2.d0
+    id_matrix_1(3,3) = 2.d0
+    id_matrix_1(4,4) = 1.d0
+    id_matrix_1(5,5) = 1.d0
+    id_matrix_1(6,6) = 1.d0
+
+    id_matrix_2 = 0.d0
+    id_matrix_2(1:3,1) = 1.d0
+    id_matrix_2(1:3,2) = 1.d0
+    id_matrix_2(1:3,3) = 1.d0
+
+    !!!Building the D matrix
+    !two cases et - es = 0 or doesnt
+    if (von_mises_strain == 0.d0) then
+        E_s = E_t
+
+        D = (E_s / 3.d0)*id_matrix_1 + (k-((2.d0*E_s)/9.d0))*id_matrix_2
+    else
+
+        e_dyadic_e = spread(devi_strain,dim=2,ncopies=6)*spread(devi_strain,dim=1,ncopies=6)
+        D_1 = ((4.d0 /(9.d0*von_mises_strain**2)) * (E_t - E_s)) * e_dyadic_e
+
+        D_2 = (E_s / 3.d0) * id_matrix_1 + (k - ((2.d0*E_s) / 9.d0))*id_matrix_2
+        D = D_1 + D_2
+
+    end if
+
+    !stress and D matrix calculations complete
+
+!     write(6,*) 'haha - your code ran but your values need work'
+    write(6,*) 'hypo stress and D matrix calcs complete'
+
+    return
+end subroutine hypoelastic_material
+
+
+
+
+
+
+
+
+
+
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 !==========================SUBROUTINE el_linelast_3dbasic_dynamic ==============================
 subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_property_list, &           ! Input variables
@@ -298,7 +551,7 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
     real (prec)  ::  B(6,length_dof_array)             ! strain = B*(dof_total+dof_increment)
     real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
     real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
-    real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
+    real (prec)  ::  E, xnu, D44, D11, D12              ! Material properties
     !
     !     Subroutine to compute element force vector for a linear elastodynamic problem
     !     El props are:
@@ -358,6 +611,9 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
 
     return
 end subroutine el_linelast_3dbasic_dynamic
+
+
+
 
 
 !==========================SUBROUTINE fieldvars_linelast_3dbasic ==============================
@@ -542,9 +798,22 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-!        strain = matmul(B,dof_total)
-!        dstrain = matmul(B,dof_increment)
-        stress = matmul(D,strain+dstrain)
+        !        strain = matmul(B,dof_total)
+        !        dstrain = matmul(B,dof_increment)
+
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !call to hypo subroutine to get new D matrix
+        if (n_properties == 4) then
+            write(6,*) 'material call, hypoelastic'
+            call hypoelastic_material(strain, dstrain, n_properties, element_properties, &
+                stress, D)
+        else
+            stress = matmul(D,strain+dstrain)
+        end if
+       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+!        stress = matmul(D,strain+dstrain)
         p = sum(stress(1:3))/3.d0
         sdev = stress
         sdev(1:3) = sdev(1:3)-p
@@ -572,4 +841,8 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
   
     return
 end subroutine fieldvars_linelast_3dbasic
+
+
+
+
 
