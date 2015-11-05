@@ -37,7 +37,7 @@
 %     The parameters are no. nodes on the element, total no. state variables, integer identifier
 
       ELEMENTS
-        PARAMETERS, 8, 0, 1002
+        PARAMETERS, 8, 0, 1001
 %       Define element properties - the values are passed to user subroutine elstif in the order they are listed here
 %       For the example provided, the params are Youngs Modulus, Poissons ratio
         PROPERTIES
@@ -108,7 +108,7 @@
 
 %   The CHECK STIFFNESS key tests the element subroutine to ensure that
 %   the residual force vector is consistent with the stiffness
-       CHECK STIFFNESS, 1002
+       CHECK STIFFNESS, 1001
 
  %    STOP
 
@@ -120,10 +120,10 @@
      STATIC STEP
 
 
-          INITIAL TIME STEP, 1.d0        % Test of a comment here
+          INITIAL TIME STEP, 1.0d0        % Test of a comment here
           MAX TIME STEP, 1.d0
           MIN TIME STEP, 0.001d0
-          MAX NUMBER OF STEPS, 11
+          MAX NUMBER OF STEPS, 10
           STOP TIME, 20.d0
           STATE PRINT STEP INTERVAL, 1
           USER PRINT STEP INTERVAL, 1
